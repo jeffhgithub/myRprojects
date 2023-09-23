@@ -1,0 +1,558 @@
+---
+title: "Predictive Model for King County Housing"
+output:
+  html_document:
+    df_print: paged
+  html_fragment:
+    self_contained: no
+  md_document:
+    pandoc_args: --no-wrap
+    variant: markdown_github
+---
+
+# Setup for Rscript
+
+```{r setup}
+#Delete all variables in memory
+rm(list=ls())
+
+#Instal Packages
+#install.packages("ggdendro")
+#install.packages("stringr")
+#install.packages("ggdendro")
+#install.packages("stringr")
+#install.packages("ggmap")
+#install.packages("rpart")
+#install.packages("leaflet")
+#install.packages("corrplot")
+#install.packages("caret", dependencies = TRUE)
+#install.packages("ddalpha", dependencies = TRUE)
+#install.packages("Rcpp", dependencies = TRUE)
+#install.packages("yaml", dependencies = TRUE)
+#install.packages("randomForest")
+
+#Load libraries and packages
+library(tidyverse)
+library(stringr)
+library(ggmap)
+library(GGally)
+library(magrittr)
+library(rpart)
+library(rpart.plot)
+
+library(lubridate)
+library(DT)
+library(leaflet)
+library(corrplot)
+library(boot) #for diagnostic plots
+library(caret)
+library(randomForest)
+
+```
+
+# Import data file into an R data frame:
+
+```{r}
+
+#setwd("C:/Users/jeffh_000/SkyDrive/Documents/UW Analytics/3rd Class Data Mining/Final Project")
+
+ff <- house_data <- read_csv("kc_house_data.csv")
+
+
+```
+
+## Explore Data
+
+```{r}
+#View Data
+glimpse(house_data)
+
+summary(house_data)
+
+```
+
+#Plot Histograms of Numeric Features (look for non-normal distributions and outliers)
+```{r}
+#Create a feature for price_per_sqft
+house_data <- house_data %>% mutate(price_per_sqft_living = price/sqft_living)
+
+
+#Histograms of numeric features
+# Create a for loop to plot lots of histograms
+
+hplots <- c("price", "price_per_sqft_living", "bedrooms", "bathrooms", "sqft_living",
+            "sqft_lot", "floors", "yr_built", "yr_renovated", "waterfront", "view",
+            "condition", "grade", "sqft_above", "sqft_basement")
+
+for(hplots in hplots) {
+
+gg_histogram <- ggplot(house_data, aes_string(x=hplots), environment = environment()) +   
+                geom_histogram(aes(y=..count..),      
+                  bins=50,
+                  color="black", fill="white")  
+
+#plot histogram
+print(gg_histogram)
+}
+
+#Notes from tables above and plots below: (is there a better way to capture observations?)
+#   outliers to filter -> zero values on yr_renovated and sqft_basement, tail on sqft_lot
+#   sqft_living could be normalized -> could create difficulty interpreting 
+#   sqft_lot could be normalized -> could create difficulty interpreting 
+#   price and price_sqft_living could be normalized
+#   relatively few waterfront homes
+#   there are points with min bedrooms & bathrooms is zero, but all sqft_living > 0
+#     which means no bare lots, confusing!
+
+```
+
+#Scatterplot Price vs Numeric Features
+
+```{r}
+#Plot scatterplot of features vs price
+
+x_cols <- c("price_per_sqft_living", "bedrooms", "bathrooms", "sqft_living", "sqft_lot", 
+            "floors", "yr_built", "yr_renovated", "waterfront", "view", "condition",
+            "grade", "lat", "long", "sqft_above", "sqft_basement")
+
+for (x_cols in x_cols) {
+
+    y_cols <- c("price")
+
+# generate scatter plot 
+gg_scatter <- ggplot(house_data, aes_string(x = x_cols, y = y_cols)) + 
+       geom_jitter(alpha = 0.1) +
+      geom_smooth(method = "gam", se = FALSE)
+    
+# print plot
+print(gg_scatter)
+    
+}
+
+#Notes on plots below: (is there a better way to capture observations?)
+#   bedrooms, bathrooms, sqft_living, grade have nice linear correlations
+#   sqft_lot has lowerend of data not well correlated but as sqft_lot > 200000 it starts to 
+#     correlate nicely
+#   sqft_basement has lots of zero values but correlates ok other than those
+#   price doesn't appear to correlate with year built
+#   yr_renovated has a lot of blank values
+#   waterfront homes seem to be fewer and more expensive on average
+#   higher prices seem to come from specific regions of long and lat
+
+
+```
+
+#Take another look at data in Boxplot format for features that can be converted to factors
+
+```{r}
+#Plot scatterplot of features vs price
+
+house_data_2 <- house_data %>% mutate(bedrooms_fac = as.factor(bedrooms), 
+                            bathrooms_fac = as.factor(bathrooms), 
+                            floors_fac = as.factor(floors), 
+                            waterfront_fac = as.factor(waterfront), 
+                            view_fac = as.factor(view), 
+                            condition_fac = as.factor(condition), 
+                            grade_fac = as.factor(grade), 
+                            zipcode_fac = as.factor(zipcode))
+
+#Plot scatterplot of features vs price
+
+x_cols2 <- c("bedrooms_fac", "bathrooms_fac", "floors_fac", "waterfront_fac", "view_fac",
+             "condition_fac", "grade_fac", "zipcode_fac")
+
+for (x_cols in x_cols2) {
+
+    y_cols <- c("price")
+
+# generate scatter plot 
+gg_boxplot <- ggplot(house_data_2, aes_string(x = x_cols, y = y_cols)) + 
+       geom_boxplot()
+    
+# print plot
+print(gg_boxplot)
+
+}
+
+#Notes on plots below: (is there a better way to capture observations?)
+#   bedrooms,bathrooms,waterfront, view, grade have fairly strong influence on price 
+#   condition has a slight influence -> consider removing before modelling
+#   floors and zipcode have no influence -> consider removing before modelling
+                           
+
+```
+
+
+#Feature Engineer and See What Insight GGpairs and Correlation Plot Offers
+```{r}
+#Normalize some Features
+house_data <- house_data %>% mutate(log_price = log(house_data$price),
+                                    log_price_per_sqft_living= log(price/sqft_living))
+```
+```{r}
+#Take a look at ggpairs for continuous variables that were most interesting
+plot_data_1 <- house_data %>% select(log_price, log_price_per_sqft_living, sqft_living,
+                                      sqft_lot, sqft_above, sqft_basement, sqft_living15,
+                                      sqft_lot15,bathrooms, bedrooms, waterfront, view,
+                                      condition,grade)
+
+ggpairs(plot_data_1, mapping = aes(alpha =0.50))
+
+#Notes on plots below: (is there a better way to capture observations?)
+#   sqft_above and sqft_living15 highly correlated to sqft_living -> eliminate features
+#   sqft_lot15 highly correlated to sqft_lot -> eliminate feature
+
+  
+```
+```{r}
+#Take a look at ggpairs for features converted to factors that were most interesting
+
+house_data_2 <- house_data_2 %>% mutate(log_price = log(house_data$price),
+                                    log_price_per_sqft_living= log(price/sqft_living))
+
+                                      
+```
+```{r}
+plot_data_2 <- house_data_2 %>% select(log_price, log_price_per_sqft_living,
+                                      bedrooms_fac, waterfront_fac, view_fac, 
+                                      condition_fac, grade_fac)
+                                      #bathrooms_fac, 
+
+ggpairs(plot_data_2, mapping = aes(alpha =0.50))
+  
+#Notes on plots below: (is there a better way to capture observations?)
+#   No additional insights 
+```
+
+```{r}
+#Generate Correlation Plot
+house_data_corr <- house_data %>% select(-id, -date)
+
+CorrelationResults = cor(house_data_corr)
+
+corrplot(CorrelationResults)
+
+#Notes on plots below: (is there a better way to capture observations?)
+#   This would indciate the ability to eliminate:
+#       sqft_lot15, sqft_living15, sqft_above, sqft_basement, 
+#       yr_renovated, yr_built
+#    This also indicates price_sqft_living correlates with lat (so does price)
+
+```
+```{r}
+#Final Feature Engineering
+#This data set for linear regression
+
+house_data_1 <- house_data %>% select(log_price, sqft_living, sqft_lot,
+                                      log_price_per_sqft_living,
+                                      bathrooms, long, lat,
+                                      bedrooms, waterfront, view, condition, grade)
+
+#This data set for logistic regression
+house_data_2 <- house_data_2 %>% select(log_price, sqft_living, sqft_lot, 
+                                      log_price_per_sqft_living,
+                                      bathrooms_fac, long, lat, 
+                                      bedrooms_fac, waterfront_fac, view_fac, condition_fac,
+                                      grade_fac)
+
+#Use this for mapping later
+house_data_x <- house_data %>% select(price, sqft_living, sqft_lot,
+                                      log_price_per_sqft_living,  
+                                      bathrooms, long, lat,
+                                      bedrooms, waterfront, view, condition, grade)
+```
+
+#Identify Initial Price Clusters from Latitude & Longitude
+#This could be used to by a buyer to make trade offs between location and size of home
+
+```{r}
+#Just plot the Lat and Long
+plot(house_data_x$long,house_data_x$lat, main = "Latitude and Longitude plot",
+     xlab = "Longitude",ylab = "Latitude") 
+
+#Generate clusters based on log_price, lat, and long
+set.seed(123)
+house_data_cluster20 = kmeans(scale(house_data_x[, c(2, 6, 7)]),15,100)
+
+house_data_x$cluster<-factor(house_data_cluster20$cluster)
+
+#plot the clusters
+ggplot(data= house_data_x, aes(x = long, y = lat)) + geom_point(aes(color=cluster))
+
+
+```
+
+
+#Create Interactive Map of Pricing using Longitude and Latitude Data
+
+```{r}
+
+house_data_x$PriceBin<-cut(house_data_x$price, c(0,250e3,500e3,750e3,1e6,2e6,999e6))
+
+center_lon = median(house_data_x$long,na.rm = TRUE)
+center_lat = median(house_data_x$lat,na.rm = TRUE)
+
+factpal <- colorFactor(c("black","blue","yellow","orange","#0B5345","red"), 
+                       house_data_x$PriceBin)
+
+leaflet(house_data_x) %>% addProviderTiles("Esri.NatGeoWorldMap") %>%
+  addCircles(lng = ~long, lat = ~lat, 
+             color = ~factpal(PriceBin))  %>%
+  # controls
+  setView(lng=center_lon, lat=center_lat,zoom = 12) %>%
+  
+  addLegend("bottomright", pal = factpal, values = ~PriceBin,
+            title = "House Price Distribution",
+            opacity = 1)
+
+```
+
+#Now Create Linear Model
+
+```{r}
+
+#Split raw data into train and test data sets
+ff= house_data_1
+
+in_train = createDataPartition(y = house_data_1$log_price, p = 0.80, list = FALSE)
+
+ff_train = house_data_1[in_train, ]
+ff_test = house_data_1[-in_train, ]
+
+#Pre-Process data
+#Centering
+preprocessing_steps = preProcess(select(ff, log_price, sqft_living, sqft_lot,
+                                      log_price_per_sqft_living,
+                                      bathrooms, long, lat,
+                                      bedrooms, waterfront, view, condition, grade),
+                                 method = c('center', 'scale', 'nzv'))
+
+ff_train_processed = predict(preprocessing_steps, newdata = ff_train)
+ff_test_processed = predict(preprocessing_steps, newdata = ff_test)
+
+#near zero variance check
+nearZeroVar(ff_train_processed, saveMetrics = TRUE)
+```
+
+```{r}
+#Full model
+set.seed(123)
+full_model = train(log_price ~.,
+                   data = ff_train_processed,
+                   method = 'lm',
+                   trControl = trainControl(method = 'cv', number = 10))
+```
+
+```{r}
+summary(full_model)
+
+plot(varImp(full_model))
+
+predict = predict(full_model, newdata = ff_test_processed)
+
+postResample(predict, obs = ff_test_processed$log_price)
+
+errors = data.frame(predicted = predict, 
+                    observed = ff_test_processed$log_price,
+                    error = predict -ff_test_processed$log_price)
+
+ggplot(errors, aes(x = predicted, y = observed)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = 'red')
+
+```
+
+#This Linear Model Produces an R^2 of almost 0.96.
+#I tried removing the log_price_per_sqft and R^2 went down to 0.71
+#I could try to improve model by removing sqft_lot but won't since R^2 is really good as-is
+#
+
+
+```{r}
+
+#Create a Random Forest model
+set.seed(123)
+
+rf_model <- randomForest(log_price ~ ., data=ff_train) 
+getTree(rf_model, 1, labelVar=TRUE)
+
+```
+```{r}
+predict = predict(rf_model, newdata = ff_test)
+
+postResample(predict, obs = ff_test$log_price)
+
+errors = data.frame(predicted = predict, 
+                    observed = ff_test$log_price,
+                    error = predict -ff_test$log_price)
+
+ggplot(errors, aes(x = predicted, y = observed)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = 'red')
+
+summary(rf_model) 
+
+plot(rf_model)
+
+varImpPlot(rf_model)
+
+```
+
+#Wow!! R^2 of 0.995 is even better than the Linear Regression result of 0.95!!
+#
+#Having price_per_sqft_living AND sqft_living as features gives a major boost to model #performance!!
+#
+#
+
+#Let's see what kind of prediction we get using Linear Regression Model
+```{r}
+#Variables given for prediction
+
+to_predict <- house_data_1 [0,] 
+to_predict[1,]$sqft_living <- 4000
+to_predict[1,]$sqft_lot <- 5000
+to_predict[1,]$bedrooms <- 4
+to_predict[1,]$bathrooms <- 3
+to_predict[1,]$condition <- 5
+to_predict[1,]$grade <- 7
+to_predict[1,]$yr_built <- 2004
+#to_predict[1,]$view <- 0
+#to_predict[1,]$waterfront <- 0
+
+
+glimpse(to_predict)
+
+predict(full_model, newdata=to_predict)
+
+```
+#Something is wrong with this Prediction: 
+#I have had mixed results, previously I got a number but now I don't.
+#
+#Not getting a predicted output is likely due to differences in model features and 
+#features provided for the prediction, so I'll create a model focused on just the 
+#features provided for prediction.
+#
+#Getting weird numerical predictions is likely because the model is based on 
+#normalized, scaled and centered inputs.
+#
+#
+#Let me try the Random Forest Model because it was not scaled.
+#
+
+```{r}
+#Variables given for prediction
+
+to_predict <- house_data_1 [0,] 
+to_predict[1,]$sqft_living <- 4000
+to_predict[1,]$sqft_lot <- 5000
+to_predict[1,]$bedrooms <- 4
+to_predict[1,]$bathrooms <- 3
+to_predict[1,]$condition <- 5
+to_predict[1,]$grade <- 7
+to_predict[1,]$yr_built <- 2004
+to_predict[1,]$view <- 0
+to_predict[1,]$waterfront <- 0
+
+
+glimpse(to_predict)
+
+predict(rf_model, newdata=to_predict)
+
+```
+#Something is wrong with this Prediction: 
+#I have had mixed results, previously I got a number but now I don't.
+#
+#Not getting a predicted output is likely due to differences in model features and 
+#features provided for the prediction, so I'll create a model focused on just the 
+#features provided for prediction.
+#
+#Now try regenerating models without normalizing and preprocessing...
+#
+
+```{r}
+
+house_data0 <- read_csv("C:/Users/jeffh_000/SkyDrive/Documents/UW Analytics/3rd Class Data Mining/Final Project R Project Folder/kc_house_data.csv")
+
+house_data0 <- house_data0 %>% select(price, sqft_living, sqft_lot,
+                                      bathrooms, yr_built,
+                                      bedrooms, condition, grade) 
+                            na.omit(house_data0)
+ 
+glimpse(house_data0)
+
+in_train0 = createDataPartition(y = house_data0$price, p = 0.80, list = FALSE)
+
+ff_train0 = house_data0[in_train, ]
+ff_test0 = house_data0[-in_train, ]
+
+
+set.seed(123)
+full_model0 = train(price ~.,
+                   data = ff_train0,
+                   method = 'lm',
+                   trControl = trainControl(method = 'cv', number = 10))
+```
+
+```{r}
+
+summary(full_model0)
+
+plot(varImp(full_model0))
+
+
+```
+
+```{r}
+#Variables given for prediction
+
+to_predict0 <- house_data0 [0,] 
+to_predict0[1,]$sqft_living <- 4000
+to_predict0[1,]$sqft_lot <- 5000
+to_predict0[1,]$bedrooms <- 4
+to_predict0[1,]$bathrooms <- 3
+to_predict0[1,]$condition <- 5
+to_predict0[1,]$grade <- 7
+to_predict0[1,]$yr_built <- 2004
+
+predict(full_model0, newdata = to_predict0)
+
+
+```
+#
+#This looks more like it!! Looks like I get a "real" prediction with unprocessed model.
+#
+#Now create a Random Forest model 
+#
+```{r}
+set.seed(123)
+
+rf_model0 <- randomForest(price ~ ., data=ff_train0) 
+getTree(rf_model0, 1, labelVar=TRUE)
+
+```
+```{r}
+summary(rf_model0) 
+
+plot(rf_model0)
+
+varImpPlot(rf_model0)
+
+```
+```{r}
+
+predict(rf_model0, newdata = to_predict0)
+
+```
+#
+#Conclusion:
+#If I'm looking for the best fit model, I would choose my Random Forest model 
+#because it has the lower RMSE and highest R^2. However, I would have to work
+#out how to use it from a practical application perspective.
+#
+#
+#Additional ideas:
+# - Price pers sqft living is a very strong predictor 
+# - Creating K-means clusters for location and/or price would allow buyers to 
+#   pick location and features, then predict price... or pick price and features,
+#   then predict location.
+#
