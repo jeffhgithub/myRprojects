@@ -54,7 +54,7 @@ library(randomForest)
 
 ```{r}
 
-#setwd("C:/Users/jeffh_000/SkyDrive/Documents/UW Analytics/3rd Class Data Mining/Final Project")
+#setwd("C:\Users\jeffh\OneDrive\Documents\Work Related\Professional Portfolio\R Projects")
 
 ff <- house_data <- read_csv("kc_house_data.csv")
 
@@ -131,8 +131,7 @@ print(gg_scatter)
 
 #Notes on plots below: (is there a better way to capture observations?)
 #   bedrooms, bathrooms, sqft_living, grade have nice linear correlations
-#   sqft_lot has lowerend of data not well correlated but as sqft_lot > 200000 it starts to 
-#     correlate nicely
+#   sqft_lot has lowerend of data not well correlated but as sqft_lot > 200000 it starts to correlate nicely
 #   sqft_basement has lots of zero values but correlates ok other than those
 #   price doesn't appear to correlate with year built
 #   yr_renovated has a lot of blank values
